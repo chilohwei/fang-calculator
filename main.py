@@ -4,7 +4,7 @@ import plotly.graph_objects as go
 import numpy as np
 
 # 设置页面配置，包括favicon
-st.set_page_config(page_title="智能房贷计算器", page_icon="🏠", layout="wide")
+st.set_page_config(page_title="智能房贷计算器", page_icon="🏠", layout="wide", initial_sidebar_state="expanded")
 
 # 样式设置
 st.markdown("""
