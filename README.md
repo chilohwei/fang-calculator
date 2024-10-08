@@ -4,14 +4,15 @@
 
 1. 创建`docker-compose.yml`文件
 ```yml
+version: '3.8'
+
 services:
-  app:
+  streamlit-app:
     image: chiloh/fang-calculator:latest
+    platform: linux/amd64
     ports:
       - "8501:8501"
-    environment:
-      - PYTHONUNBUFFERED=1
-    restart: unless-stopped
+    restart: always
     deploy:
       resources:
         limits:
