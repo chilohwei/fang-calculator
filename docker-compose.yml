@@ -1,0 +1,13 @@
+services:
+  app:
+    image: chiloh/fang-calculator:latest
+    ports:
+      - "8501:8501"
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
