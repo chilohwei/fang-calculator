@@ -2,6 +2,10 @@
 
 一个基于 Streamlit 的智能房贷计算器，帮助您轻松计算和比较不同还款方式。
 
+## 项目预览
+![image](https://github.com/user-attachments/assets/c7ff2409-1e98-48bb-97ef-1027bebefb62)
+![image](https://github.com/user-attachments/assets/2eed82db-5210-4862-98fd-2091506011b3)
+
 ## 功能特点
 
 - 支持等额本息和等额本金两种还款方式
@@ -99,8 +103,3 @@ MIT License
 ## 联系方式
 
 如有问题或建议，请提交 Issue 或联系开发者。
-
-## 项目预览
-
-![image](https://github.com/user-attachments/assets/f0d8f665-9754-4183-bcb6-51f588cd68f0)
-![image](https://github.com/user-attachments/assets/1fb4cc43-48f4-41a9-bb0c-3afb5d3a1cda)
