@@ -2,6 +2,7 @@ version: '3.8'
 
 services:
   streamlit-app:
+    container_name: fang-calculator
     image: chiloh/fang-calculator:latest
     platform: linux/amd64
     ports:

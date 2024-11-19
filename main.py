@@ -4,7 +4,20 @@ import plotly.graph_objects as go
 import numpy as np
 
 # 设置页面配置，包括favicon
-st.set_page_config(page_title="智能房贷计算器", page_icon="🏠", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(
+    page_title="智能房贷计算器",
+    page_icon="🏠",
+    layout="wide",
+    initial_sidebar_state="expanded",
+    menu_items={
+        'About': '智能房贷计算器 - 帮助您做出明智的房贷决策'
+    }
+)
+
+# 添加Umami统计代码
+st.markdown("""
+    <script defer src="https://tongji.chiloh.com/random-string.js" data-website-id="840ee47d-e2bb-46e7-8692-ed307c567a82"></script>
+    """, unsafe_allow_html=True)
 
 # 样式设置
 st.markdown("""
@@ -126,11 +139,15 @@ def calculate_equal_principal_schedule(loan_amount, annual_interest_rate, loan_t
         })
     return schedule
 
-def calculate_transaction_fees(house_price):
-    deed_tax = house_price * 0.03
-    agent_fee = house_price * 0.02
-    other_fees = 5000
-    return deed_tax + agent_fee + other_fees
+def calculate_transaction_fees(house_price, deed_tax_rate=0.01, agent_fee_rate=0.02, other_fees=5000):
+    deed_tax = house_price * deed_tax_rate
+    agent_fee = house_price * agent_fee_rate
+    return {
+        'deed_tax': deed_tax,
+        'agent_fee': agent_fee,
+        'other_fees': other_fees,
+        'total': deed_tax + agent_fee + other_fees
+    }
 
 def find_best_loan_strategy(house_price, down_payment_min, down_payment_max, loan_term_options, annual_interest_rate):
     best_strategy = None
@@ -152,212 +169,364 @@ def find_best_loan_strategy(house_price, down_payment_min, down_payment_max, loa
 
     return best_strategy
 
+# 输入验证函数
+def validate_input(value, min_value, max_value, field_name):
+    """验证输入值是否在合法范围内"""
+    try:
+        value = float(value)
+        if value < min_value or value > max_value:
+            st.error(f"{field_name}必须在{min_value}到{max_value}之间")
+            return False
+        return True
+    except ValueError:
+        st.error(f"{field_name}必须是有效的数字")
+        return False
+
+@st.cache_data
+def calculate_monthly_payment(loan_amount, annual_interest_rate, loan_term_years):
+    """计算月供（使用缓存优化性能）"""
+    try:
+        monthly_interest_rate = annual_interest_rate / 12 / 100
+        num_payments = loan_term_years * 12
+        if monthly_interest_rate == 0:
+            return loan_amount / num_payments
+        return loan_amount * (monthly_interest_rate * (1 + monthly_interest_rate) ** num_payments) / (
+                (1 + monthly_interest_rate) ** num_payments - 1)
+    except Exception as e:
+        st.error(f"计算月供时出错：{str(e)}")
+        return None
+
+@st.cache_data
+def calculate_equal_installment_schedule(loan_amount, annual_interest_rate, loan_term_years):
+    """计算等额本息还款计划（使用缓存优化性能）"""
+    monthly_payment = calculate_monthly_payment(loan_amount, annual_interest_rate, loan_term_years)
+    schedule = []
+    remaining_balance = loan_amount
+    monthly_interest_rate = annual_interest_rate / 12 / 100
+
+    for month in range(1, loan_term_years * 12 + 1):
+        interest_payment = remaining_balance * monthly_interest_rate
+        principal_payment = monthly_payment - interest_payment
+        remaining_balance -= principal_payment
+        schedule.append({
+            '月份': month,
+            '月供': monthly_payment,
+            '本金': principal_payment,
+            '利息': interest_payment,
+            '剩余本金': remaining_balance
+        })
+    return schedule
+
+@st.cache_data
+def calculate_loan_details(loan_amount, annual_interest_rate, loan_term_years, loan_type, commercial_ratio=None):
+    """计算贷款详细信息，支持不同贷款类型"""
+    if loan_type == "商业贷款":
+        return calculate_monthly_payment(loan_amount, annual_interest_rate, loan_term_years)
+    elif loan_type == "公积金贷款":
+        # 公积金利率通常低于商贷利率
+        fund_rate = min(3.25, annual_interest_rate)  # 使用3.25%作为公积金贷款的默认利率上限
+        return calculate_monthly_payment(loan_amount, fund_rate, loan_term_years)
+    else:  # 组合贷款
+        commercial_amount = loan_amount * (commercial_ratio / 100)
+        fund_amount = loan_amount * ((100 - commercial_ratio) / 100)
+        fund_rate = min(3.25, annual_interest_rate)
+        
+        commercial_payment = calculate_monthly_payment(commercial_amount, annual_interest_rate, loan_term_years)
+        fund_payment = calculate_monthly_payment(fund_amount, fund_rate, loan_term_years)
+        
+        return commercial_payment + fund_payment
+
+@st.cache_data
+def calculate_affordability(monthly_income, monthly_payment, risk_tolerance):
+    """计算还款压力和可负担能力"""
+    payment_ratio = (monthly_payment / monthly_income) * 100
+    
+    risk_thresholds = {
+        '保守': {'safe': 30, 'warning': 40},
+        '稳健': {'safe': 40, 'warning': 50},
+        '激进': {'safe': 50, 'warning': 60}
+    }
+    
+    thresholds = risk_thresholds[risk_tolerance]
+    
+    if payment_ratio <= thresholds['safe']:
+        return '安全', payment_ratio
+    elif payment_ratio <= thresholds['warning']:
+        return '警告', payment_ratio
+    else:
+        return '危险', payment_ratio
+
+@st.cache_data
+def calculate_extra_payment_impact(loan_amount, annual_interest_rate, loan_term_years, extra_payment_yearly):
+    """计算额外还款的影响"""
+    monthly_payment = calculate_monthly_payment(loan_amount, annual_interest_rate, loan_term_years)
+    original_schedule = calculate_equal_installment_schedule(loan_amount, annual_interest_rate, loan_term_years)
+    total_interest_original = sum(month['利息'] for month in original_schedule)
+    
+    # 计算每年额外还款后的新还款计划
+    remaining_principal = loan_amount
+    total_interest_with_extra = 0
+    years_to_repay = loan_term_years
+    
+    for year in range(loan_term_years):
+        # 计算当年的利息
+        yearly_interest = remaining_principal * (annual_interest_rate / 100)
+        total_interest_with_extra += yearly_interest
+        
+        # 扣除正常还款和额外还款
+        yearly_payment = monthly_payment * 12
+        remaining_principal -= (yearly_payment - yearly_interest)  # 扣除正常还款中的本金部分
+        remaining_principal -= (extra_payment_yearly * 10000)  # 扣除额外还款（万元转换为元）
+        
+        if remaining_principal <= 0:
+            years_to_repay = year + 1
+            break
+    
+    savings = total_interest_original - total_interest_with_extra
+    time_saved = loan_term_years - years_to_repay
+    
+    return {
+        '节省利息': savings,
+        '缩短年限': time_saved,
+        '原始总利息': total_interest_original,
+        '新总利息': total_interest_with_extra
+    }
+
+@st.cache_data
+def project_future_payment_pressure(monthly_payment, monthly_income, income_growth_rate, loan_term_years):
+    """预测未来还款压力变化"""
+    try:
+        years = list(range(loan_term_years + 1))
+        payment_to_income_ratios = []
+        
+        for year in years:
+            # 计算该年的月收入（考虑年增长率）
+            projected_monthly_income = monthly_income * (1 + income_growth_rate/100) ** year
+            # 计算月供收入比
+            if projected_monthly_income > 0:  # 添加除数检查
+                ratio = (monthly_payment / projected_monthly_income) * 100  # 转换为百分比
+                payment_to_income_ratios.append(ratio)
+            else:
+                payment_to_income_ratios.append(0)
+        
+        return years, payment_to_income_ratios
+    except Exception as e:
+        st.error(f"计算未来还款压力时出错：{str(e)}")
+        return [], []
+
 # 侧边栏：基本信息输入
 with st.sidebar:
     st.title('🏠 智能房贷计算器 💰')
-    st.header('基本信息')
-    house_price = st.number_input('房产总价 (万元)', min_value=10, max_value=5000, value=160, step=10) * 10000
-    down_payment_min = st.number_input('最低首付金额 (万元)', min_value=0, max_value=int(house_price / 10000),
-                                       value=int(house_price * 0.2 / 10000), step=10) * 10000
-    down_payment_max = st.number_input('最高首付金额 (万元)', min_value=int(down_payment_min / 10000),
-                                       max_value=int(house_price / 10000), value=int(house_price * 0.4 / 10000),
-                                       step=10) * 10000
-    property_type = st.selectbox('房产类型', ['新房', '二手房'])
-    house_status = st.selectbox('房产状态', ['首套房', '二套房'])
-    loan_term_options = [10, 15, 20, 25, 30]
-    loan_type = st.radio('贷款类型', ['商业贷款', '公积金贷款', '组合贷款'])
-
-    # 根据选择自动填写默认利率
+    
+    # 房屋总价和首付
+    house_price = st.number_input('房屋总价（万元）', min_value=1, max_value=10000, value=300)
+    down_payment = st.number_input('首付金额（万元）', min_value=0, max_value=house_price, value=int(house_price * 0.3))
+    
+    # 交易费用设置
+    with st.expander("🏷️ 交易费用设置"):
+        st.markdown("### 交易费用详情")
+        deed_tax_rate = st.slider('契税税率 (%)', 0.0, 5.0, 1.0, 0.1, format="%0.1f%%") / 100
+        agent_fee_rate = st.slider('中介费率 (%)', 0.0, 5.0, 2.0, 0.1, format="%0.1f%%") / 100
+        other_fees = st.number_input('其他费用 (元)', 0, 100000, 5000, 1000)
+        
+        # 计算并显示交易费用明细
+        fees = calculate_transaction_fees(house_price * 10000, deed_tax_rate, agent_fee_rate, other_fees)
+        st.markdown("#### 费用明细")
+        st.markdown(f"- 契税：{fees['deed_tax']:,.2f}元 ({deed_tax_rate*100:.1f}%)")
+        st.markdown(f"- 中介费：{fees['agent_fee']:,.2f}元 ({agent_fee_rate*100:.1f}%)")
+        st.markdown(f"- 其他费用：{fees['other_fees']:,.2f}元")
+        st.markdown(f"**总交易费用：{fees['total']:,.2f}元**")
+    
+    # 贷款类型选择
+    loan_type = st.selectbox('贷款类型', ['商业贷款', '公积金贷款', '组合贷款'])
+    
     if loan_type == '商业贷款':
-        if house_status == '首套房':
-            default_interest_rate = 3.55
-        else:
-            default_interest_rate = 3.9
+        annual_interest_rate = st.number_input('商贷年利率（%）', min_value=0.0, max_value=15.0, value=3.2, step=0.05)
     elif loan_type == '公积金贷款':
-        if house_status == '首套房':
-            default_interest_rate = 2.85
-        else:
-            default_interest_rate = 3.325
+        annual_interest_rate = st.number_input('公积金年利率（%）', min_value=0.0, max_value=15.0, value=2.85, step=0.05)
     else:
-        if house_status == '首套房':
-            default_interest_rate = 2.85 * 0.5 + 3.55 * 0.5  # 组合贷款的利率为比例加权平均
-        else:
-            default_interest_rate = 3.325 * 0.5 + 3.9 * 0.5  # 组合贷款的利率为比例加权平均
+        st.write('组合贷款配置：')
+        commercial_ratio = st.slider('商贷比例（%）', min_value=0, max_value=100, value=50, step=5)
+        commercial_rate = st.number_input('商贷年利率（%）', min_value=0.0, max_value=15.0, value=3.2, step=0.05)
+        fund_rate = st.number_input('公积金年利率（%）', min_value=0.0, max_value=15.0, value=2.85, step=0.05)
+        annual_interest_rate = (commercial_rate * commercial_ratio + fund_rate * (100 - commercial_ratio)) / 100
 
-    annual_interest_rate = st.number_input('年利率 (%)', min_value=2.0, max_value=10.0, value=default_interest_rate,
-                                           step=0.01)
-    calculate_button = st.button('立即计算')
+    # 贷款期限和还款方式
+    loan_term_years = st.selectbox('贷款期限（年）', [10, 15, 20, 25, 30], index=4)
+    repayment_method = st.selectbox('还款方式', ['等额本息', '等额本金'])
+    
+    # 高级选项
+    with st.expander("高级选项"):
+        risk_tolerance = st.slider('风险承受能力', min_value=1, max_value=5, value=3, 
+                                 help='1=保守，5=激进')
+        monthly_income = st.number_input('月收入（元）', min_value=0, value=20000)
+        income_growth_rate = st.slider('预期年收入增长率（%）', min_value=0, max_value=20, value=5)
+        extra_payment_yearly = st.number_input('每年额外还款（万元）', min_value=0, value=0)
+    
+    calculate_button = st.button('立即计算', use_container_width=True)
 
-# 主界面：计算结果展示
+# 主要内容区域
 if calculate_button:
-    st.subheader('最佳贷款策略')
+    if not validate_input(house_price, 1, 10000, "房屋总价"):
+        st.stop()
+    if not validate_input(annual_interest_rate, 0, 15, "年利率"):
+        st.stop()
 
-    best_strategy = find_best_loan_strategy(house_price, down_payment_min, down_payment_max, loan_term_options, annual_interest_rate)
-
-    st.markdown(f"""
-    <div class="recommendation">
-        <h4>推荐方案：</h4>
-        <p>首付金额: <b>{best_strategy['down_payment'] / 10000:.2f}</b> 万元 (首付比例: <b>{best_strategy['down_payment'] / house_price * 100:.2f}%</b>)</p>
-        <p>贷款金额: <b>{best_strategy['loan_amount'] / 10000:.2f}</b> 万元</p>
-        <p>贷款期限: <b>{best_strategy['loan_term']}</b> 年</p>
-        <p>每月还款: <b>{best_strategy['monthly_payment']:.2f}</b> 元</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.markdown("""
-    <div class="tips">
-        <h4>为什么选择这个方案？</h4>
-        <ul>
-            <li>在满足您设定的首付范围内，这个方案可以使每月还款额最低。</li>
-            <li>较长的贷款期限可以降低月供压力，但也意味着总利息支出会增加。</li>
-            <li>这个方案在首付、贷款期限和月供之间取得了较好的平衡。</li>
-        </ul>
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.subheader('贷款概况')
-
-    loan_amount = best_strategy['loan_amount']
-    loan_term_years = best_strategy['loan_term']
-    best_down_payment = best_strategy['down_payment']
-    transaction_fees = calculate_transaction_fees(house_price)
-    leverage_ratio = loan_amount / (best_down_payment + transaction_fees) * 100  # 转换为百分比
-
-    st.markdown(f"""
-    <div class="info-box">
-        <p>首付金额: <b>{best_down_payment / 10000:.2f}</b> 万元 (首付比例: <b>{best_down_payment / house_price * 100:.2f}%</b>)</p>
-        <p>贷款金额: <b>{loan_amount / 10000:.2f}</b> 万元</p>
-        <p>交易费用: <b>{transaction_fees / 10000:.2f}</b> 万元</p>
-        <p>杠杆率: <b>{leverage_ratio:.2f}%</b></p>
-    </div>
-
-    <p>计算公式：</p>
-    <p class="formula">首付金额 = 房产总价 × 首付比例</p>
-    <p class="formula">贷款金额 = 房产总价 - 首付金额</p>
-    <p class="formula">交易费用 = 契税 + 中介费 + 其他费用</p>
-    <p class="formula">杠杆率 = 贷款金额 / (首付金额 + 交易费用) × 100%</p>
-    """, unsafe_allow_html=True)
-
-    st.subheader('贷款建议')
-    st.markdown(f"""
-    根据您提供的信息，我们建议的最佳贷款策略如上所示。以下是一些额外的建议：
-    """)
-
-    if leverage_ratio > 400:
-        st.warning('您的杠杆率较高，请注意控制风险。考虑增加首付比例或选择更便宜的房产。')
-    elif leverage_ratio < 200:
-        st.success('您的杠杆率较低，财务状况良好。可以考虑增加投资多元化，或选择更高质量的房产。')
-    else:
-        st.info('您的杠杆率处于合理范围。请确保月供不超过家庭收入的30%。')
-
-    if loan_term_years > 20:
-        st.info('长期贷款可以降低月供压力，但总利息较高。如果经济条件允许，可以考虑提前还款以减少利息支出。')
-
-    if loan_type == '组合贷款':
-        st.info('组合贷款可以平衡利率，但请注意公积金贷款额度限制和申请流程可能更复杂。')
-
-    st.subheader('还款方式对比')
-    # 还款方式对比
-    equal_installment_schedule = calculate_equal_installment_schedule(loan_amount, annual_interest_rate, loan_term_years)
-    equal_principal_schedule = calculate_equal_principal_schedule(loan_amount, annual_interest_rate, loan_term_years)
-
-    data = {
-        '还款方式': ['等额本息', '等额本金'],
-        '首月还款': [equal_installment_schedule[0]['月供'], equal_principal_schedule[0]['月供']],
-        '末月还款': [equal_installment_schedule[-1]['月供'], equal_principal_schedule[-1]['月供']],
-        '总利息': [sum(month['利息'] for month in equal_installment_schedule),
-                   sum(month['利息'] for month in equal_principal_schedule)]
-    }
-    df = pd.DataFrame(data)
-    df['首月还款'] = df['首月还款'].apply(lambda x: f"{x:.2f}")
-    df['末月还款'] = df['末月还款'].apply(lambda x: f"{x:.2f}")
-    df['总利息'] = df['总利息'].apply(lambda x: f"{x / 10000:.2f}万")
-
-    st.table(df.set_index('还款方式'))
-    st.markdown("""
-    **建议：**
-    1. 如果您的收入稳定且预期不会有大幅增长，可以选择等额本息，便于长期规划。
-    2. 如果您预期未来收入会持续增长，可以选择等额本金，减少总利息支出。
-    3. 无论选择哪种方式，都要确保月供不超过家庭收入的30%，以防止过高的还款压力。
-    4. 如果经济条件允许，可以考虑选择等额本金，并在前期做好资金储备，以应对较高的月供。
-    """)
-
-
-    def plot_repayment_schedule(df, title):
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=df.index,
-            y=df['月供'],
-            name='月供',
-            line=dict(color='blue'),
-            hovertemplate='月份: %{x}<br>月供: ¥%{y:.2f}'
-        ))
-        fig.add_trace(go.Scatter(
-            x=df.index,
-            y=df['本金'],
-            name='本金',
-            line=dict(color='green'),
-            hovertemplate='月份: %{x}<br>本金: ¥%{y:.2f}'
-        ))
-        fig.add_trace(go.Scatter(
-            x=df.index,
-            y=df['利息'],
-            name='利息',
-            line=dict(color='red'),
-            hovertemplate='月份: %{x}<br>利息: ¥%{y:.2f}'
-        ))
-        fig.update_layout(
-            title=title,
-            xaxis_title='月份',
-            yaxis_title='金额 (元)',
-            hovermode='x unified',
-            hoverlabel=dict(bgcolor="white", font_size=12),
-            yaxis=dict(tickformat=',.0f')
-        )
-        return fig
-
-
-    def display_schedule(df, title):
-        col1, col2 = st.columns([1, 2])
+    try:
+        loan_amount = house_price - down_payment
+        
+        # 顶部信息区域
+        st.header("贷款方案概览")
+        
+        # 基本信息和关键指标
+        col1, col2, col3 = st.columns(3)
         with col1:
-            st.dataframe(df.style.format({
-                '月供': '{:.2f}',
-                '本金': '{:.2f}',
-                '利息': '{:.2f}',
-                '剩余本金': '{:.2f}'
-            }))
+            st.metric("贷款总额", f"{loan_amount:.2f}万元")
         with col2:
-            st.plotly_chart(plot_repayment_schedule(df, title), use_container_width=True)
+            st.metric("首付金额", f"{down_payment:.2f}万元")
+        with col3:
+            st.metric("首付比例", f"{(down_payment/house_price*100):.1f}%")
+            
+        # 计算月供
+        equal_installment = calculate_monthly_payment(loan_amount * 10000, annual_interest_rate, loan_term_years)
+        equal_principal_schedule = calculate_equal_principal_schedule(loan_amount * 10000, annual_interest_rate, loan_term_years)
+        first_month_equal_principal = equal_principal_schedule[0]['月供']
+        last_month_equal_principal = equal_principal_schedule[-1]['月供']
 
+        # 月供信息展示
+        st.subheader("月供详情")
+        payment_comparison = pd.DataFrame({
+            '还款方式': ['等额本息', '等额本金(首月)', '等额本金(末月)'],
+            '月供金额': [
+                f"{equal_installment:.2f}元",
+                f"{first_month_equal_principal:.2f}元",
+                f"{last_month_equal_principal:.2f}元"
+            ]
+        })
+        st.dataframe(payment_comparison, hide_index=True)
 
-    df_equal_installment = pd.DataFrame(equal_installment_schedule)
-    df_equal_installment['月份'] = df_equal_installment['月份'].astype(int)
-    df_equal_installment = df_equal_installment.set_index('月份')
+        # 如果选择计算交易费用
+        fees = calculate_transaction_fees(house_price * 10000, deed_tax_rate, agent_fee_rate, other_fees)
+        st.info(f"""
+        💰 交易费用估算：
+        - 契税：{fees['deed_tax']:,.2f}元 ({deed_tax_rate*100:.1f}%)
+        - 中介费：{fees['agent_fee']:,.2f}元 ({agent_fee_rate*100:.1f}%)
+        - 其他费用：{fees['other_fees']:,.2f}元
+        - 总交易费用：{fees['total']:,.2f}元
+        """)
 
-    df_equal_principal = pd.DataFrame(equal_principal_schedule)
-    df_equal_principal['月份'] = df_equal_principal['月份'].astype(int)
-    df_equal_principal = df_equal_principal.set_index('月份')
+        # 还款压力分析（如果提供了月收入）
+        if monthly_income > 0:
+            st.subheader("还款压力评估")
+            payment_pressure = (equal_installment / monthly_income) * 100
+            if payment_pressure <= 30:
+                st.success(f"📈 当前月供收入比为{payment_pressure:.1f}%，还款压力适中")
+            elif payment_pressure <= 50:
+                st.warning(f"⚠️ 当前月供收入比为{payment_pressure:.1f}%，还款压力较大")
+            else:
+                st.error(f"🚨 当前月供收入比为{payment_pressure:.1f}%，还款压力过大，请谨慎考虑")
 
-    tab1, tab2 = st.tabs(["等额本息还款计划", "等额本金还款计划"])
-    with tab1:
-        display_schedule(df_equal_installment, '等额本息还款计划')
-    with tab2:
-        display_schedule(df_equal_principal, '等额本金还款计划')
+        # 图表区域
+        st.header("还款计划可视化")
+        
+        # 计算两种还款方式的数据
+        equal_installment_schedule = calculate_equal_installment_schedule(loan_amount * 10000, annual_interest_rate, loan_term_years)
+        equal_principal_schedule = calculate_equal_principal_schedule(loan_amount * 10000, annual_interest_rate, loan_term_years)
+        
+        # 创建还款方式对比图表
+        fig = go.Figure()
+        
+        # 等额本息
+        ei_df = pd.DataFrame(equal_installment_schedule)
+        fig.add_trace(go.Scatter(
+            x=ei_df['月份'],
+            y=ei_df['月供'],
+            name='等额本息',
+            line=dict(color='#1f77b4')
+        ))
+        
+        # 等额本金
+        ep_df = pd.DataFrame(equal_principal_schedule)
+        fig.add_trace(go.Scatter(
+            x=ep_df['月份'],
+            y=ep_df['月供'],
+            name='等额本金',
+            line=dict(color='#ff7f0e')
+        ))
+        
+        fig.update_layout(
+            title='月供变化趋势对比',
+            xaxis_title='还款月数',
+            yaxis_title='月供金额（元）',
+            hovermode='x unified'
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        # 收入增长预期下的还款压力变化
+        if monthly_income > 0:
+            st.subheader("未来还款压力预测")
+            future_pressure = project_future_payment_pressure(equal_installment, monthly_income, income_growth_rate, loan_term_years)
+            years, payment_to_income_ratios = future_pressure
+            pressure_df = pd.DataFrame({
+                '年份': years,
+                '月供收入比': payment_to_income_ratios
+            })
+            
+            fig2 = go.Figure()
+            fig2.add_trace(go.Scatter(
+                x=pressure_df['年份'],
+                y=pressure_df['月供收入比'],
+                name='月供收入比',
+                line=dict(color='#2ecc71')
+            ))
+            
+            fig2.update_layout(
+                title='未来还款压力趋势',
+                xaxis_title='年份',
+                yaxis_title='月供收入比（%）',
+                hovermode='x unified'
+            )
+            st.plotly_chart(fig2, use_container_width=True)
+
+        # 展示详细的还款计划
+        with st.expander("查看详细还款计划"):
+            st.subheader("还款计划详情")
+            if repayment_method == '等额本息':
+                schedule_df = pd.DataFrame(equal_installment_schedule)
+            else:
+                schedule_df = pd.DataFrame(equal_principal_schedule)
+            
+            # 转换为更易读的格式
+            schedule_df['月供'] = schedule_df['月供'].round(2)
+            schedule_df['本金'] = schedule_df['本金'].round(2)
+            schedule_df['利息'] = schedule_df['利息'].round(2)
+            schedule_df['剩余本金'] = schedule_df['剩余本金'].round(2)
+            
+            # 显示表格
+            st.dataframe(schedule_df)
+            
+            # 添加下载按钮
+            csv = schedule_df.to_csv(index=False)
+            st.download_button(
+                label="下载还款计划表",
+                data=csv,
+                file_name="还款计划.csv",
+                mime="text/csv"
+            )
+        
+    except Exception as e:
+        st.error(f"计算过程中出现错误：{str(e)}")
+        st.info("请检查输入数据是否正确，如果问题持续存在，请刷新页面重试。")
+        st.stop()
 
 else:
     st.markdown(
         """
         <div class='center-content'>
-            <p>开始输入你的房贷信息，然后点击"立即计算"按钮查看详细结果。</p>
-            <p>我们将为您提供：</p>
-            <ul>
-                <li>最佳贷款策略</li>
-                <li>贷款概况分析</li>
-                <li>个性化贷款建议</li>
-                <li>还款方式对比</li>
-                <li>详细还款计划</li>
-            </ul>
-            <p>让我们帮助您做出明智的房贷决策!</p>
+            <h2>🏠 智能房贷计算器</h2>
+            <p>开始输入你的房贷信息，然后点击"立即计算"按钮查看详细分析结果。</p>
+            <p>支持商业贷款、公积金贷款和组合贷款计算</p>
+            <p>提供多种还款方案对比和未来还款压力分析</p>
         </div>
         """,
         unsafe_allow_html=True
