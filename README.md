@@ -3,8 +3,9 @@
 一个基于 Streamlit 的智能房贷计算器，帮助您轻松计算和比较不同还款方式。
 
 ## 项目预览
-![image](https://github.com/user-attachments/assets/c7ff2409-1e98-48bb-97ef-1027bebefb62)
-![image](https://github.com/user-attachments/assets/2eed82db-5210-4862-98fd-2091506011b3)
+<img width="1920" alt="image" src="https://github.com/user-attachments/assets/e8203130-1659-4e4d-9209-c365dcd34c37">
+
+<img width="1920" alt="image" src="https://github.com/user-attachments/assets/834bf51b-a49c-49f0-a4ec-5fd831f3b329">
 
 ## 功能特点
 
@@ -12,7 +13,6 @@
 - 可视化还款计划，直观展示每月还款情况
 - 智能推荐最优贷款方案
 - 支持自定义首付比例
-- 包含各类税费计算
 
 ## 快速开始
 
